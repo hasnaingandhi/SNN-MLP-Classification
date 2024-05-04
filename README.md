@@ -48,10 +48,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7, python -m torch.distributed.launch --nproc
 
 - Tiny
   - Accuracy: 81.88%
-  - [[log]]()
+  - [[log]](https://github.com/hasnaingandhi/SNN-MLP-Classification/blob/main/output/snnmlp_tiny.log)
 - Small
   - Accuracy: 83.30%
-  - [[log]]()
+  - [[log]](https://github.com/hasnaingandhi/SNN-MLP-Classification/blob/main/output/snnmlp_small.log)
 - Base
   - Accuracy: 83.59%
-  - [[log]]()
+  - [[log]](https://github.com/hasnaingandhi/SNN-MLP-Classification/blob/main/output/snnmlp_base.log)
