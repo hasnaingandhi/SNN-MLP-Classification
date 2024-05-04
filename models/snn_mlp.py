@@ -1,5 +1,3 @@
-# 2022.06.27-Changed for building SNN-MLP
-#            Huawei Technologies Co., Ltd. <foss@huawei.com>
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +5,7 @@ import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_ 
 from .snn_cuda import LIFSpike
 
+# MLP module
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -25,24 +24,29 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
-
+# LIF module
 class LIFModule(nn.Module):
     def __init__(self, dim, lif_bias=True, proj_drop=0.,
                  lif=-1, lif_fix_tau=False, lif_fix_vth=False, lif_init_tau=0.25, lif_init_vth=-1.):
         super().__init__()
         self.dim = dim
         self.lif = lif
+
+        # Convolutional layers for LIF block
         self.conv1 = nn.Conv2d(dim, dim, 1, 1, 0, groups=1, bias=lif_bias)
         self.conv2_1 = nn.Conv2d(dim, dim, 1, 1, 0, groups=1, bias=lif_bias)
         self.conv2_2 = nn.Conv2d(dim, dim, 1, 1, 0, groups=1, bias=lif_bias)
         self.conv3 = nn.Conv2d(dim, dim, 1, 1, 0, groups=1, bias=lif_bias)
 
+        # GELU Activation layer
         self.actn = nn.GELU()
 
+        # Batch Normalization layer
         self.norm1 = MyNorm(dim)
         self.norm2 = MyNorm(dim)
         self.norm3 = MyNorm(dim)
 
+        # LIF spike modules
         self.lif1 = LIFSpike(lif=lif, fix_tau=lif_fix_tau, fix_vth=lif_fix_vth,
                                init_tau=lif_init_tau, init_vth=lif_init_vth, dim=2)
         self.lif2 = LIFSpike(lif=lif, fix_tau=lif_fix_tau, fix_vth=lif_fix_vth,
@@ -74,28 +78,7 @@ class LIFModule(nn.Module):
     def extra_repr(self) -> str:
         return f'dim={self.dim}, lif={self.lif}'
 
-    def flops(self, N):
-        # calculate flops for 1 window with token length of N
-        flops = 0
-        # conv1 
-        flops += N * self.dim * self.dim
-        # norm 1
-        flops += N * self.dim
-        # dw 1
-        flops += N * self.dim * 3 * 3
-        # norm 2
-        flops += N * self.dim
-        # conv2_1 conv2_2
-        flops += N * self.dim * self.dim * 2
-        # x_lr + x_td
-        flops += N * self.dim
-        # norm2
-        flops += N * self.dim
-        # norm3
-        flops += N * self.dim * self.dim
-        return flops
-
-
+# LIF block
 class LIFBlock(nn.Module):
     def __init__(self, dim, input_resolution,
                  mlp_ratio=4., lif_bias=True, drop=0., drop_path=0.,
@@ -134,20 +117,7 @@ class LIFBlock(nn.Module):
         return f"dim={self.dim}, input_resolution={self.input_resolution}, " \
                f"lif={self.lif}, mlp_ratio={self.mlp_ratio}"
 
-    def flops(self):
-        flops = 0
-        H, W = self.input_resolution
-        # norm1
-        flops += self.dim * H * W
-        # lif module
-        flops += self.lif_module.flops(H * W)
-        # mlp
-        flops += 2 * H * W * self.dim * self.dim * self.mlp_ratio
-        # norm2
-        flops += self.dim * H * W
-        return flops
-
-
+# Patch merging layer
 class PatchMerging(nn.Module):
     def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
         super().__init__()
@@ -171,13 +141,7 @@ class PatchMerging(nn.Module):
     def extra_repr(self) -> str:
         return f"input_resolution={self.input_resolution}, dim={self.dim}"
 
-    def flops(self):
-        H, W = self.input_resolution
-        flops = H * W * self.dim
-        flops += (H // 2) * (W // 2) * 8 * self.dim * self.dim
-        return flops
-
-
+# Basic layer
 class BasicLayer(nn.Module):
     def __init__(self, dim, input_resolution, depth,
                  mlp_ratio=4., lif_bias=True, drop=0.,
@@ -221,15 +185,7 @@ class BasicLayer(nn.Module):
     def extra_repr(self) -> str:
         return f"dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}"
 
-    def flops(self):
-        flops = 0
-        for blk in self.blocks:
-            flops += blk.flops()
-        if self.downsample is not None:
-            flops += self.downsample.flops()
-        return flops
-
-
+# Patch embedding layer
 class PatchEmbed(nn.Module):
     def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
         super().__init__()
@@ -255,18 +211,11 @@ class PatchEmbed(nn.Module):
             x = self.norm(x)
         return x
 
-    def flops(self):
-        Ho, Wo = self.patches_resolution
-        flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
-        if self.norm is not None:
-            flops += Ho * Wo * self.embed_dim
-        return flops
-
-
+# Group normalization
 def MyNorm(dim):
     return nn.GroupNorm(1, dim)
 
-
+# SNN-MLP model
 class SNNMLP(nn.Module):
     def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=1000,
                  embed_dim=96, depths=[2, 2, 6, 2], 
@@ -348,12 +297,3 @@ class SNNMLP(nn.Module):
         x = self.forward_features(x)
         x = self.head(x)
         return x
-
-    def flops(self):
-        flops = 0
-        flops += self.patch_embed.flops()
-        for i, layer in enumerate(self.layers):
-            flops += layer.flops()
-        flops += self.num_features * self.patches_resolution[0] * self.patches_resolution[1] // (2 ** self.num_layers)
-        flops += self.num_features * self.num_classes
-        return flops

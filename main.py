@@ -1,5 +1,3 @@
-# 2022.06.27-Changed for building SNN-MLP
-#            Huawei Technologies Co., Ltd. <foss@huawei.com>
 import os
 import sys
 import time
@@ -25,13 +23,13 @@ from config import get_config
 from models import build_model
 from data import build_loader
 
-
+# Check if Apex is installed
 try:
-    # noinspection PyUnresolvedReferences
     from apex import amp
 except ImportError:
     amp = None
 
+# Function to parse command-line arguments
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
@@ -42,7 +40,7 @@ def parse_option():
         nargs='+',
     )
 
-    # easy config modification
+    # Training options
     parser.add_argument('--batch-size', type=int, help="batch size for single GPU")
     parser.add_argument('--data-path', type=str, help='path to dataset')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
@@ -70,8 +68,6 @@ def parse_option():
     parser.add_argument('--lif_fix_vth', action='store_true')
     parser.add_argument('--lif_init_tau', type=float, default=0.25)
     parser.add_argument('--lif_init_vth', type=float, default=0.1)
-
-    # distributed training
     parser.add_argument("--local_rank", type=int, required=False, help='local rank for DistributedDataParallel')
 
     
@@ -81,7 +77,7 @@ def parse_option():
 
     return args, config
 
-
+# Function to build learning rate scheduler
 def build_scheduler(config, optimizer, n_iter_per_epoch):
     num_steps = int(config.TRAIN.EPOCHS * n_iter_per_epoch)
     warmup_steps = int(config.TRAIN.WARMUP_EPOCHS * n_iter_per_epoch)
@@ -111,24 +107,23 @@ def build_scheduler(config, optimizer, n_iter_per_epoch):
 
     return lr_scheduler
 
-
+# Function to set weight decay
 def set_weight_decay(model, skip_list=(), skip_keywords=()):
     has_decay = []
     no_decay = []
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
-            continue  # frozen weights
+            continue
         if len(param.shape) == 1 or name.endswith(".bias") or (name in skip_list) or \
                 check_keywords_in_name(name, skip_keywords):
             no_decay.append(param)
-            # print(f"{name} has no weight decay")
         else:
             has_decay.append(param)
     return [{'params': has_decay},
             {'params': no_decay, 'weight_decay': 0.}]
 
-
+# Check if keywords are present in parameter names
 def check_keywords_in_name(name, keywords=()):
     isin = False
     for keyword in keywords:
@@ -136,7 +131,7 @@ def check_keywords_in_name(name, keywords=()):
             isin = True
     return isin
 
-
+# Function to create logger
 @functools.lru_cache()
 def create_logger(output_dir, dist_rank=0, name=''):
     # create logger
@@ -165,7 +160,7 @@ def create_logger(output_dir, dist_rank=0, name=''):
 
     return logger
 
-
+# Load checkpoint
 def load_checkpoint(config, model, optimizer, optimizer_lif, lr_scheduler, lr_scheduler_lif, logger):
     logger.info(f"==============> Resuming form {config.MODEL.RESUME}....................")
     if config.MODEL.RESUME.startswith('https'):
@@ -196,7 +191,7 @@ def load_checkpoint(config, model, optimizer, optimizer_lif, lr_scheduler, lr_sc
     torch.cuda.empty_cache()
     return max_accuracy
 
-
+# Save checkpoint
 def save_checkpoint(config, epoch, model, max_accuracy, optimizer, optimizer_lif, lr_scheduler, lr_scheduler_lif, logger):
     save_state = {'model': model.state_dict(),
                   'optimizer': optimizer.state_dict(),
@@ -214,7 +209,7 @@ def save_checkpoint(config, epoch, model, max_accuracy, optimizer, optimizer_lif
     torch.save(save_state, save_path)
     logger.info(f"{save_path} saved !!!")
 
-
+# Function to calculate gradient norm
 def get_grad_norm(parameters, norm_type=2):
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
@@ -227,7 +222,7 @@ def get_grad_norm(parameters, norm_type=2):
     total_norm = total_norm ** (1. / norm_type)
     return total_norm
 
-
+# Helper function for auto resume
 def auto_resume_helper(output_dir):
     checkpoints = os.listdir(output_dir)
     checkpoints = [ckpt for ckpt in checkpoints if ckpt.endswith('pth')]
@@ -240,14 +235,14 @@ def auto_resume_helper(output_dir):
         resume_file = None
     return resume_file
 
-
+# Function to reduce tensor
 def reduce_tensor(tensor):
     rt = tensor.clone()
     dist.all_reduce(rt, op=dist.ReduceOp.SUM)
     rt /= dist.get_world_size()
     return rt
 
-
+# Main function
 def main(config):
     dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn = build_loader(config)
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
@@ -292,7 +287,6 @@ def main(config):
         lr_scheduler_lif = build_scheduler(config, optimizer_lif, len(data_loader_train))
 
     if config.AUG.MIXUP > 0.:
-        # smoothing is handled with mixup label transform
         criterion = SoftTargetCrossEntropy()
     elif config.MODEL.LABEL_SMOOTHING > 0.:
         criterion = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
@@ -307,10 +301,6 @@ def main(config):
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         if config.EVAL_MODE:
             return
-
-    if config.THROUGHPUT_MODE:
-        throughput(data_loader_val, model, logger)
-        return
 
     if config.TRAIN.AUTO_RESUME:
         resume_file = auto_resume_helper(config.OUTPUT)
@@ -343,7 +333,7 @@ def main(config):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
     
-
+# Function to train for one epoch
 def train_one_epoch(config, model, criterion, data_loader, optimizer, optimizer_lif, epoch, mixup_fn, lr_scheduler, lr_scheduler_lif):
     model.train()
     optimizer.zero_grad()
@@ -446,7 +436,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, optimizer_
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
-
+# Function to validate
 @torch.no_grad()
 def validate(config, data_loader, model):
     criterion = torch.nn.CrossEntropyLoss(reduce=False)
@@ -489,26 +479,6 @@ def validate(config, data_loader, model):
                 f'Mem {memory_used:.0f}MB')
     logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
     return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
-
-
-@torch.no_grad()
-def throughput(data_loader, model, logger):
-    model.eval()
-
-    for idx, (images, _) in enumerate(data_loader):
-        images = images.cuda(non_blocking=True)
-        batch_size = images.shape[0]
-        for i in range(50):
-            model(images)
-        torch.cuda.synchronize()
-        logger.info(f"throughput averaged with 30 times")
-        tic1 = time.time()
-        for i in range(30):
-            model(images)
-        torch.cuda.synchronize()
-        tic2 = time.time()
-        logger.info(f"batch_size {batch_size} throughput {30 * batch_size / (tic2 - tic1)}")
-        return
 
 
 if __name__ == '__main__':
@@ -557,7 +527,6 @@ if __name__ == '__main__':
             f.write(config.dump())
         logger.info(f"Full config saved to {path}")
 
-    # print config
     logger.info(config.dump())
 
     main(config)
